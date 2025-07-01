@@ -1,0 +1,61 @@
+{
+    "name": "four-bytes/four-webdav-client-php",
+    "description": "A modern PHP WebDAV client library for Nextcloud, ownCloud, and other WebDAV servers",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "webdav",
+        "nextcloud",
+        "owncloud",
+        "http",
+        "client",
+        "php"
+    ],
+    "authors": [
+        {
+            "name": "4 Bytes",
+            "email": "info@4bytes.de"
+        }
+    ],
+    "homepage": "https://github.com/four-bytes/four-webdav-client-php",
+    "support": {
+        "issues": "https://github.com/four-bytes/four-webdav-client-php/issues",
+        "source": "https://github.com/four-bytes/four-webdav-client-php"
+    },
+    "require": {
+        "php": "^8.1",
+        "guzzlehttp/guzzle": "^7.0",
+        "ext-simplexml": "*",
+        "ext-libxml": "*"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.0",
+        "phpstan/phpstan": "^1.10",
+        "squizlabs/php_codesniffer": "^3.7"
+    },
+    "autoload": {
+        "psr-4": {
+            "Four\\WebDav\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Four\\WebDav\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "test-coverage": "phpunit --coverage-html coverage",
+        "phpstan": "phpstan analyse src --level=8",
+        "cs-check": "phpcs src tests",
+        "cs-fix": "phpcbf src tests"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "composer/package-versions-deprecated": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
