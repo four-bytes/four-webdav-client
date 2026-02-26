@@ -57,6 +57,17 @@ if ($response->success) {
 }
 ```
 
+## Factory Method
+
+```php
+// Static factory (recommended) — uses auto-discovered PSR-18 client
+$client = WebDavClient::create(
+    baseUrl: 'https://your-nextcloud.com/remote.php/dav/files/username/',
+    username: 'your-username',
+    password: 'your-app-token'
+);
+```
+
 ## API Reference
 
 ### WebDavClient
@@ -64,12 +75,22 @@ if ($response->success) {
 #### Constructor
 
 ```php
-public function __construct(string $baseUrl, string $username, string $password)
+public function __construct(
+    string $baseUrl,
+    string $username,
+    string $password,
+    ?ClientInterface $httpClient = null,
+    ?RequestFactoryInterface $requestFactory = null,
+    ?StreamFactoryInterface $streamFactory = null
+)
 ```
 
 - `$baseUrl` - WebDAV server base URL
 - `$username` - Username for authentication
 - `$password` - Password or app token for authentication
+- `$httpClient` - Optional PSR-18 HTTP client (auto-discovered if null)
+- `$requestFactory` - Optional PSR-17 request factory (auto-discovered if null)
+- `$streamFactory` - Optional PSR-17 stream factory (auto-discovered if null)
 
 #### Methods
 
@@ -290,7 +311,8 @@ composer cs-fix
 ## Requirements
 
 - PHP 8.1 or higher
-- Guzzle HTTP client library
+- `four-bytes/four-http-client ^4.0`
+- PSR-18 HTTP client (symfony/http-client or guzzlehttp/guzzle)
 - SimpleXML extension
 - LibXML extension
 
