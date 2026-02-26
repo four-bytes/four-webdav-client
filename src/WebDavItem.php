@@ -46,7 +46,7 @@ readonly class WebDavItem
 
         $units = ['B', 'KB', 'MB', 'GB', 'TB'];
         $bytes = $this->size;
-        $i = floor(log($bytes, 1024));
+        $i = (int) floor(log($bytes, 1024));
 
         return round($bytes / pow(1024, $i), 2) . ' ' . $units[$i];
     }
@@ -61,6 +61,9 @@ readonly class WebDavItem
 
     /**
      * Convert to array representation.
+     */
+    /**
+     * @return array<string, mixed>
      */
     public function toArray(): array
     {

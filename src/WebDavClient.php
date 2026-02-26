@@ -5,14 +5,18 @@ declare(strict_types=1);
 namespace Four\WebDav;
 
 use DateTime;
-use GuzzleHttp\Client;
-use GuzzleHttp\Exception\GuzzleException;
+use Four\Http\Configuration\ClientConfig;
+use Four\Http\Factory\HttpClientFactory;
+use Psr\Http\Client\ClientExceptionInterface;
+use Psr\Http\Client\ClientInterface;
+use Psr\Http\Message\RequestFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamFactoryInterface;
 use SimpleXMLElement;
 
 /**
  * WebDAV Client for PHP
- * 
+ *
  * A modern WebDAV client for Nextcloud, ownCloud, and other WebDAV servers.
  */
 class WebDavClient
@@ -20,29 +24,54 @@ class WebDavClient
     private string $baseUrl;
     private string $username;
     private string $password;
+    private ClientInterface $httpClient;
+    private RequestFactoryInterface $requestFactory;
+    private StreamFactoryInterface $streamFactory;
 
     /**
      * Create a new WebDAV client instance.
      */
-    public function __construct(string $baseUrl, string $username, string $password)
-    {
+    public function __construct(
+        string $baseUrl,
+        string $username,
+        string $password,
+        ?ClientInterface $httpClient = null,
+        ?RequestFactoryInterface $requestFactory = null,
+        ?StreamFactoryInterface $streamFactory = null,
+    ) {
         $this->baseUrl = rtrim($baseUrl, '/') . '/';
         $this->username = $username;
         $this->password = $password;
+
+        if ($httpClient === null || $requestFactory === null || $streamFactory === null) {
+            $factory = new HttpClientFactory();
+            $config = new ClientConfig(baseUri: $this->baseUrl);
+            $builtClient = $factory->create($config);
+
+            $psr17 = new \Nyholm\Psr7\Factory\Psr17Factory();
+
+            $this->httpClient = $httpClient ?? $builtClient;
+            $this->requestFactory = $requestFactory ?? $psr17;
+            $this->streamFactory = $streamFactory ?? $psr17;
+        } else {
+            $this->httpClient = $httpClient;
+            $this->requestFactory = $requestFactory;
+            $this->streamFactory = $streamFactory;
+        }
     }
 
     /**
-     * Create HTTP client with authentication.
+     * Create a WebDAV client using HttpClientFactory defaults.
      */
-    private function createClient(): Client
+    public static function create(string $baseUrl, string $username, string $password): self
     {
-        return new Client([
-            'headers' => [
-                'Authorization' => 'Basic ' . base64_encode($this->username . ':' . $this->password),
-                'User-Agent' => 'Four-WebDAV-Client-PHP/1.0'
-            ],
-            'base_uri' => $this->baseUrl
-        ]);
+        $factory = new HttpClientFactory();
+        $config = new ClientConfig(baseUri: rtrim($baseUrl, '/') . '/');
+        $psrClient = $factory->create($config);
+
+        $psr17 = new \Nyholm\Psr7\Factory\Psr17Factory();
+
+        return new self($baseUrl, $username, $password, $psrClient, $psr17, $psr17);
     }
 
     /**
@@ -60,7 +89,7 @@ class WebDavClient
     {
         try {
             $response = $this->request('PROPFIND', $path);
-            
+
             if (intval($response->getStatusCode() / 100) !== 2) {
                 return new WebDavResponse(
                     success: false,
@@ -81,8 +110,8 @@ class WebDavClient
             $basePath = '';
 
             foreach ($childResponses as $childResponse) {
-                $childPath = urldecode((string)$childResponse->href);
-                
+                $childPath = urldecode((string) $childResponse->href);
+
                 if (!$basePath) {
                     $basePath = $childPath;
                 } else {
@@ -99,7 +128,7 @@ class WebDavClient
                 items: $items
             );
 
-        } catch (GuzzleException $e) {
+        } catch (ClientExceptionInterface $e) {
             return new WebDavResponse(
                 success: false,
                 message: 'Failed to list directory: ' . $e->getMessage()
@@ -114,7 +143,7 @@ class WebDavClient
     {
         try {
             $response = $this->request('GET', $path);
-            
+
             if (intval($response->getStatusCode() / 100) !== 2) {
                 return new WebDavResponse(
                     success: false,
@@ -131,7 +160,7 @@ class WebDavClient
                 contentType: $contentType
             );
 
-        } catch (GuzzleException $e) {
+        } catch (ClientExceptionInterface $e) {
             return new WebDavResponse(
                 success: false,
                 message: 'Failed to download file: ' . $e->getMessage()
@@ -180,7 +209,7 @@ class WebDavClient
                 message: $success ? 'File uploaded successfully' : $response->getReasonPhrase()
             );
 
-        } catch (GuzzleException $e) {
+        } catch (ClientExceptionInterface $e) {
             return new WebDavResponse(
                 success: false,
                 message: 'Failed to upload file: ' . $e->getMessage()
@@ -203,7 +232,7 @@ class WebDavClient
                 message: $success ? 'File deleted successfully' : $response->getReasonPhrase()
             );
 
-        } catch (GuzzleException $e) {
+        } catch (ClientExceptionInterface $e) {
             return new WebDavResponse(
                 success: false,
                 message: 'Failed to delete file: ' . $e->getMessage()
@@ -226,7 +255,7 @@ class WebDavClient
                 message: $success ? 'Directory created successfully' : $response->getReasonPhrase()
             );
 
-        } catch (GuzzleException $e) {
+        } catch (ClientExceptionInterface $e) {
             return new WebDavResponse(
                 success: false,
                 message: 'Failed to create directory: ' . $e->getMessage()
@@ -242,7 +271,7 @@ class WebDavClient
         try {
             $response = $this->request('HEAD', $path);
             return intval($response->getStatusCode() / 100) === 2;
-        } catch (GuzzleException $e) {
+        } catch (ClientExceptionInterface $e) {
             return false;
         }
     }
@@ -253,7 +282,7 @@ class WebDavClient
     public function searchFiles(string $directory, string $pattern): WebDavResponse
     {
         $listResponse = $this->list($directory);
-        
+
         if (!$listResponse->success) {
             return $listResponse;
         }
@@ -274,10 +303,8 @@ class WebDavClient
     public function getFileInfo(string $path): WebDavResponse
     {
         try {
-            $response = $this->request('PROPFIND', $path, [
-                'Depth' => '0'
-            ]);
-            
+            $response = $this->request('PROPFIND', $path, ['Depth' => '0']);
+
             if (intval($response->getStatusCode() / 100) !== 2) {
                 return new WebDavResponse(
                     success: false,
@@ -294,12 +321,12 @@ class WebDavClient
             }
 
             $childResponses = $xml->children('DAV:');
-            
+
             if (count($childResponses) > 0) {
                 $prop = $childResponses[0]->propstat->prop;
                 $filename = basename($path);
                 $item = $this->propToWebDavItem($prop, $filename);
-                
+
                 return new WebDavResponse(
                     success: true,
                     items: [$item]
@@ -311,7 +338,7 @@ class WebDavClient
                 message: 'File not found'
             );
 
-        } catch (GuzzleException $e) {
+        } catch (ClientExceptionInterface $e) {
             return new WebDavResponse(
                 success: false,
                 message: 'Failed to get file info: ' . $e->getMessage()
@@ -321,21 +348,31 @@ class WebDavClient
 
     /**
      * Make HTTP request to WebDAV server.
+     *
+     * @param array<string, string> $headers
      */
-    private function request(string $method, string $path, array $headers = [], ?string $body = null): ResponseInterface
-    {
-        $path = ltrim($path, '/');
-        $client = $this->createClient();
-        
-        $options = [];
-        if (!empty($headers)) {
-            $options['headers'] = $headers;
-        }
-        if ($body !== null) {
-            $options['body'] = $body;
+    private function request(
+        string $method,
+        string $path,
+        array $headers = [],
+        ?string $body = null,
+    ): ResponseInterface {
+        $url = $this->baseUrl . ltrim($path, '/');
+
+        $request = $this->requestFactory->createRequest($method, $url)
+            ->withHeader('Authorization', 'Basic ' . base64_encode($this->username . ':' . $this->password))
+            ->withHeader('User-Agent', 'Four-WebDAV-Client-PHP/2.0');
+
+        foreach ($headers as $name => $value) {
+            $request = $request->withHeader($name, $value);
         }
 
-        return $client->request($method, $path, $options);
+        if ($body !== null) {
+            $stream = $this->streamFactory->createStream($body);
+            $request = $request->withBody($stream);
+        }
+
+        return $this->httpClient->sendRequest($request);
     }
 
     /**
@@ -344,21 +381,21 @@ class WebDavClient
     private function propToWebDavItem(SimpleXMLElement $element, string $path): WebDavItem
     {
         $dav = $element->children('DAV:');
-        
+
         $isDirectory = isset($dav->resourcetype->collection);
         $lastModified = null;
         $size = 0;
 
         if (isset($dav->{'last-modified'})) {
             try {
-                $lastModified = new DateTime((string)$dav->{'last-modified'});
+                $lastModified = new DateTime((string) $dav->{'last-modified'});
             } catch (\Exception $e) {
                 // Ignore invalid date formats
             }
         }
 
         if (isset($dav->{'content-length'})) {
-            $size = intval((string)$dav->{'content-length'});
+            $size = intval((string) $dav->{'content-length'});
         }
 
         return new WebDavItem(
@@ -367,7 +404,7 @@ class WebDavClient
             isDirectory: $isDirectory,
             size: $size,
             lastModified: $lastModified,
-            contentType: (string)($dav->{'content-type'} ?? '')
+            contentType: (string) ($dav->{'content-type'} ?? '')
         );
     }
 }

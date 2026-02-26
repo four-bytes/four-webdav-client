@@ -24,14 +24,22 @@
     },
     "require": {
         "php": "^8.1",
-        "guzzlehttp/guzzle": "^7.0",
+        "four-bytes/four-http-client": "^4.0",
+        "psr/http-client": "^1.0",
+        "psr/http-factory": "^1.0",
+        "psr/http-message": "^1.0|^2.0",
         "ext-simplexml": "*",
         "ext-libxml": "*"
     },
     "require-dev": {
-        "phpunit/phpunit": "^10.0",
-        "phpstan/phpstan": "^1.10",
-        "squizlabs/php_codesniffer": "^3.7"
+        "phpunit/phpunit": "^11.0",
+        "phpstan/phpstan": "^2.0",
+        "php-http/mock-client": "^1.6",
+        "nyholm/psr7": "^1.8"
+    },
+    "suggest": {
+        "symfony/http-client": "PSR-18 HTTP client implementation",
+        "guzzlehttp/guzzle": "Alternative PSR-18 HTTP client implementation"
     },
     "autoload": {
         "psr-4": {
@@ -43,18 +51,23 @@
             "Four\\WebDav\\Tests\\": "tests/"
         }
     },
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../four-http-client",
+            "options": {
+                "versions": {
+                    "four-bytes/four-http-client": "4.0.1"
+                }
+            }
+        }
+    ],
     "scripts": {
         "test": "phpunit",
-        "test-coverage": "phpunit --coverage-html coverage",
-        "phpstan": "phpstan analyse src --level=8",
-        "cs-check": "phpcs src tests",
-        "cs-fix": "phpcbf src tests"
+        "phpstan": "phpstan analyse src tests --level=6"
     },
     "config": {
-        "sort-packages": true,
-        "allow-plugins": {
-            "composer/package-versions-deprecated": true
-        }
+        "sort-packages": true
     },
     "minimum-stability": "stable",
     "prefer-stable": true
