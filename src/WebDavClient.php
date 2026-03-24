@@ -101,6 +101,7 @@ class WebDavClient implements WebDavClientInterface
     <d:getlastmodified/>
     <d:getcontenttype/>
     <nc:mount-type/>
+    <oc:checksums/>
   </d:prop>
 </d:propfind>';
 
@@ -592,6 +593,19 @@ class WebDavClient implements WebDavClientInterface
                 $mountType = $mountTypeNode->textContent;
             }
 
+            $checksum = '';
+            $checksumsNode = $xpath->query('.//oc:checksums', $response)->item(0);
+            if ($checksumsNode) {
+                // Try nested <oc:checksum> first
+                $checksumChild = $xpath->query('oc:checksum', $checksumsNode)->item(0);
+                if ($checksumChild) {
+                    $checksum = trim($checksumChild->textContent);
+                } else {
+                    // Fallback: direct text content
+                    $checksum = trim($checksumsNode->textContent);
+                }
+            }
+
             $mtime = 0;
             $mtimeNode = $xpath->query('.//d:getlastmodified', $response)->item(0);
             if ($mtimeNode) {
@@ -610,6 +624,7 @@ class WebDavClient implements WebDavClientInterface
                 mtime: $mtime,
                 contentType: $contentType,
                 mountType: $mountType,
+                checksum: $checksum,
             );
         }
 

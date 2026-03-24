@@ -21,6 +21,7 @@ readonly class WebDavItem
         public int $mtime = 0,
         public string $contentType = '',
         public string $mountType = '',
+        public string $checksum = '',
     ) {}
 
     /**
@@ -53,6 +54,7 @@ readonly class WebDavItem
             'mtime' => $this->mtime,
             'contentType' => $this->contentType,
             'mountType' => $this->mountType,
+            'checksum' => $this->checksum,
         ];
     }
 }
