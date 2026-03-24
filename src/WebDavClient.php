@@ -4,407 +4,661 @@ declare(strict_types=1);
 
 namespace Four\WebDav;
 
-use DateTime;
-use Four\Http\Configuration\ClientConfig;
-use Four\Http\Factory\HttpClientFactory;
 use Psr\Http\Client\ClientExceptionInterface;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
-use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamFactoryInterface;
-use SimpleXMLElement;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 /**
- * WebDAV Client for PHP
+ * WebDAV client using PSR-18 HTTP Client.
  *
- * A modern WebDAV client for Nextcloud, ownCloud, and other WebDAV servers.
+ * All paths are relative to the base URL. The injected HTTP client
+ * can be retrieved via getHttpClient() for advanced usage (e.g. casting
+ * to Guzzle for async operations in a wrapper/subclass).
  */
-class WebDavClient
+class WebDavClient implements WebDavClientInterface
 {
-    private string $baseUrl;
+    protected ClientInterface $httpClient;
+    protected RequestFactoryInterface $requestFactory;
+    protected StreamFactoryInterface $streamFactory;
+    protected string $baseUrl;
+    protected LoggerInterface $logger;
     private string $username;
     private string $password;
-    private ClientInterface $httpClient;
-    private RequestFactoryInterface $requestFactory;
-    private StreamFactoryInterface $streamFactory;
 
-    /**
-     * Create a new WebDAV client instance.
-     */
     public function __construct(
         string $baseUrl,
         string $username,
         string $password,
-        ?ClientInterface $httpClient = null,
-        ?RequestFactoryInterface $requestFactory = null,
-        ?StreamFactoryInterface $streamFactory = null,
+        ClientInterface $httpClient,
+        RequestFactoryInterface $requestFactory,
+        StreamFactoryInterface $streamFactory,
     ) {
-        $this->baseUrl = rtrim($baseUrl, '/') . '/';
+        $this->baseUrl = rtrim($baseUrl, '/');
         $this->username = $username;
         $this->password = $password;
-
-        if ($httpClient === null || $requestFactory === null || $streamFactory === null) {
-            $factory = new HttpClientFactory();
-            $config = new ClientConfig(baseUri: $this->baseUrl);
-            $builtClient = $factory->create($config);
-
-            $psr17 = new \Nyholm\Psr7\Factory\Psr17Factory();
-
-            $this->httpClient = $httpClient ?? $builtClient;
-            $this->requestFactory = $requestFactory ?? $psr17;
-            $this->streamFactory = $streamFactory ?? $psr17;
-        } else {
-            $this->httpClient = $httpClient;
-            $this->requestFactory = $requestFactory;
-            $this->streamFactory = $streamFactory;
-        }
+        $this->httpClient = $httpClient;
+        $this->requestFactory = $requestFactory;
+        $this->streamFactory = $streamFactory;
+        $this->logger = new NullLogger();
     }
 
     /**
-     * Create a WebDAV client using HttpClientFactory defaults.
+     * Static factory using HttpClientFactory from four-http-client.
+     * Falls back to constructor with explicit PSR interfaces.
      */
-    public static function create(string $baseUrl, string $username, string $password): self
-    {
-        $factory = new HttpClientFactory();
-        $config = new ClientConfig(baseUri: rtrim($baseUrl, '/') . '/');
+    public static function create(
+        string $baseUrl,
+        string $username,
+        string $password,
+    ): static {
+        $factory = new \Four\Http\Factory\HttpClientFactory();
+        $config = new \Four\Http\Configuration\ClientConfig(baseUri: rtrim($baseUrl, '/') . '/');
         $psrClient = $factory->create($config);
 
         $psr17 = new \Nyholm\Psr7\Factory\Psr17Factory();
 
-        return new self($baseUrl, $username, $password, $psrClient, $psr17, $psr17);
+        return new static($baseUrl, $username, $password, $psrClient, $psr17, $psr17);
+    }
+
+    public function setLogger(LoggerInterface $logger): void
+    {
+        $this->logger = $logger;
+    }
+
+    public function getBaseUrl(): string
+    {
+        return $this->baseUrl;
     }
 
     /**
-     * Get full URL for a path.
+     * Get the injected PSR-18 HTTP client.
+     * Callers can cast this to the concrete type (e.g. \GuzzleHttp\Client)
+     * for async/streaming features.
      */
-    public function getFullPath(string $path): string
+    public function getHttpClient(): ClientInterface
     {
-        return $this->baseUrl . ltrim($path, '/');
+        return $this->httpClient;
     }
 
-    /**
-     * List directory contents.
-     */
-    public function list(string $path = ''): WebDavResponse
+    // ─────────────────────────────────────────────────────────────
+    // Directory Listing (PROPFIND)
+    // ─────────────────────────────────────────────────────────────
+
+    public function listDirectory(string $path = '/'): array
     {
+        $encodedPath = $this->encodePath($path);
+        $url = $this->buildFullUrl($encodedPath);
+
+        $propfindBody = '<?xml version="1.0"?>
+<d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" xmlns:nc="http://nextcloud.org/ns">
+  <d:prop>
+    <d:resourcetype/>
+    <d:getcontentlength/>
+    <d:getetag/>
+    <d:getlastmodified/>
+    <d:getcontenttype/>
+    <nc:mount-type/>
+  </d:prop>
+</d:propfind>';
+
+        $request = $this->createRequest('PROPFIND', $url)
+            ->withHeader('Depth', '1')
+            ->withHeader('Content-Type', 'application/xml')
+            ->withBody($this->streamFactory->createStream($propfindBody));
+
         try {
-            $response = $this->request('PROPFIND', $path);
+            $response = $this->httpClient->sendRequest($request);
+            $statusCode = $response->getStatusCode();
 
-            if (intval($response->getStatusCode() / 100) !== 2) {
-                return new WebDavResponse(
-                    success: false,
-                    message: $response->getReasonPhrase()
-                );
+            if ($statusCode < 200 || $statusCode >= 300) {
+                throw new \RuntimeException(sprintf(
+                    'WebDAV PROPFIND %s failed: HTTP %d — %s',
+                    $path,
+                    $statusCode,
+                    (string) $response->getBody()
+                ));
             }
 
-            $xml = simplexml_load_string($response->getBody()->getContents());
-            if ($xml === false) {
-                return new WebDavResponse(
-                    success: false,
-                    message: 'Failed to parse XML response'
-                );
+            $fullUrlPath = parse_url($url, PHP_URL_PATH) ?? $encodedPath;
+            return $this->parsePropfindResponse($response->getBody()->getContents(), $fullUrlPath);
+        } catch (ClientExceptionInterface $e) {
+            throw new \RuntimeException(
+                sprintf('WebDAV PROPFIND %s failed: %s', $path, $e->getMessage()),
+                $e->getCode(),
+                $e
+            );
+        }
+    }
+
+    public function listRecursive(string $path = '/', ?callable $onDirectory = null): array
+    {
+        $fileCount = 0;
+        return $this->doListRecursive($path, $onDirectory, $fileCount);
+    }
+
+    public function listBreadthFirst(
+        string $path = '/',
+        ?array $initialEntries = null,
+        ?callable $onDirectory = null,
+    ): array {
+        $files = [];
+        $fileCount = 0;
+        $queue = [];
+
+        $entries = $initialEntries ?? $this->listDirectory($path);
+
+        foreach ($entries as $entry) {
+            if ($entry->isDirectory) {
+                $queue[] = $entry->path;
+            } else {
+                $files[] = $entry;
+                $fileCount++;
+            }
+        }
+
+        $dirsTotal = count($queue);
+        $dirsProcessed = 0;
+
+        while (!empty($queue)) {
+            $dirPath = array_shift($queue);
+            $dirsProcessed++;
+
+            try {
+                $dirEntries = $this->listDirectory($dirPath);
+            } catch (\RuntimeException $e) {
+                $this->logger->warning('PROPFIND failed during BFS, skipping directory', [
+                    'dirPath' => $dirPath,
+                    'error' => $e->getMessage(),
+                ]);
+                if ($onDirectory !== null) {
+                    $onDirectory($dirPath, $dirsProcessed, $dirsTotal, $fileCount);
+                }
+                continue;
             }
 
-            $childResponses = $xml->children('DAV:');
-            $items = [];
-            $basePath = '';
-
-            foreach ($childResponses as $childResponse) {
-                $childPath = urldecode((string) $childResponse->href);
-
-                if (!$basePath) {
-                    $basePath = $childPath;
+            foreach ($dirEntries as $entry) {
+                if ($entry->isDirectory) {
+                    $queue[] = $entry->path;
+                    $dirsTotal++;
                 } else {
-                    $prop = $childResponse->propstat->prop;
-                    $relativePath = trim(substr($childPath, strlen($basePath)), '/');
-                    if ($relativePath) {
-                        $items[] = $this->propToWebDavItem($prop, $relativePath);
-                    }
+                    $files[] = $entry;
+                    $fileCount++;
                 }
             }
 
-            return new WebDavResponse(
-                success: true,
-                items: $items
-            );
-
-        } catch (ClientExceptionInterface $e) {
-            return new WebDavResponse(
-                success: false,
-                message: 'Failed to list directory: ' . $e->getMessage()
-            );
+            if ($onDirectory !== null) {
+                $onDirectory($dirPath, $dirsProcessed, $dirsTotal, $fileCount);
+            }
         }
+
+        return $files;
     }
 
-    /**
-     * Download file content.
-     */
-    public function download(string $path): WebDavResponse
-    {
-        try {
-            $response = $this->request('GET', $path);
+    // ─────────────────────────────────────────────────────────────
+    // Download
+    // ─────────────────────────────────────────────────────────────
 
-            if (intval($response->getStatusCode() / 100) !== 2) {
-                return new WebDavResponse(
-                    success: false,
-                    message: $response->getReasonPhrase()
-                );
+    public function downloadFile(string $path): string
+    {
+        $encodedPath = $this->encodePath($path);
+        $request = $this->createRequest('GET', $this->buildFullUrl($encodedPath));
+
+        try {
+            $response = $this->httpClient->sendRequest($request);
+            $statusCode = $response->getStatusCode();
+
+            if ($statusCode < 200 || $statusCode >= 300) {
+                throw new \RuntimeException(sprintf(
+                    'WebDAV GET %s failed: HTTP %d',
+                    $path,
+                    $statusCode
+                ));
             }
 
-            $content = $response->getBody()->getContents();
-            $contentType = $response->getHeaderLine('Content-Type');
-
-            return new WebDavResponse(
-                success: true,
-                content: $content,
-                contentType: $contentType
-            );
-
+            return $response->getBody()->getContents();
         } catch (ClientExceptionInterface $e) {
-            return new WebDavResponse(
-                success: false,
-                message: 'Failed to download file: ' . $e->getMessage()
+            throw new \RuntimeException(
+                sprintf('WebDAV GET %s failed: %s', $path, $e->getMessage()),
+                $e->getCode(),
+                $e
             );
         }
     }
 
-    /**
-     * Upload file from local path.
-     */
-    public function upload(string $remotePath, string $localPath): WebDavResponse
+    // ─────────────────────────────────────────────────────────────
+    // Upload
+    // ─────────────────────────────────────────────────────────────
+
+    public function uploadFile(string $path, string $content, array $extraHeaders = []): void
     {
-        if (!file_exists($localPath)) {
-            return new WebDavResponse(
-                success: false,
-                message: 'Local file does not exist: ' . $localPath
-            );
+        $encodedPath = $this->encodePath($path);
+        $request = $this->createRequest('PUT', $this->buildFullUrl($encodedPath))
+            ->withBody($this->streamFactory->createStream($content));
+
+        foreach ($extraHeaders as $name => $value) {
+            $request = $request->withHeader($name, $value);
         }
 
-        $content = file_get_contents($localPath);
-        if ($content === false) {
-            return new WebDavResponse(
-                success: false,
-                message: 'Failed to read local file: ' . $localPath
-            );
-        }
-
-        $mimeType = mime_content_type($localPath) ?: 'application/octet-stream';
-
-        return $this->uploadContent($remotePath, $content, $mimeType);
-    }
-
-    /**
-     * Upload content directly.
-     */
-    public function uploadContent(string $path, string $content, string $mimeType = 'text/plain'): WebDavResponse
-    {
         try {
-            $headers = ['Content-Type' => $mimeType];
-            $response = $this->request('PUT', $path, $headers, $content);
+            $response = $this->httpClient->sendRequest($request);
+            $statusCode = $response->getStatusCode();
 
-            $success = intval($response->getStatusCode() / 100) === 2;
-
-            return new WebDavResponse(
-                success: $success,
-                message: $success ? 'File uploaded successfully' : $response->getReasonPhrase()
-            );
-
+            if ($statusCode < 200 || $statusCode >= 300) {
+                throw new \RuntimeException(sprintf(
+                    'WebDAV PUT %s failed: HTTP %d — %s',
+                    $path,
+                    $statusCode,
+                    (string) $response->getBody()
+                ));
+            }
         } catch (ClientExceptionInterface $e) {
-            return new WebDavResponse(
-                success: false,
-                message: 'Failed to upload file: ' . $e->getMessage()
+            throw new \RuntimeException(
+                sprintf('WebDAV PUT %s failed: %s', $path, $e->getMessage()),
+                $e->getCode(),
+                $e
             );
         }
     }
 
-    /**
-     * Delete file or directory.
-     */
-    public function delete(string $path): WebDavResponse
+    // ─────────────────────────────────────────────────────────────
+    // Directory Operations
+    // ─────────────────────────────────────────────────────────────
+
+    public function createDirectory(string $path): void
     {
+        $encodedPath = $this->encodePath($path);
+        $request = $this->createRequest('MKCOL', $this->buildFullUrl($encodedPath));
+
         try {
-            $response = $this->request('DELETE', $path);
+            $response = $this->httpClient->sendRequest($request);
+            $statusCode = $response->getStatusCode();
 
-            $success = intval($response->getStatusCode() / 100) === 2;
+            // 405 = already exists — that's OK
+            if ($statusCode === 405) {
+                return;
+            }
 
-            return new WebDavResponse(
-                success: $success,
-                message: $success ? 'File deleted successfully' : $response->getReasonPhrase()
-            );
-
+            if ($statusCode < 200 || $statusCode >= 300) {
+                throw new \RuntimeException(sprintf(
+                    'WebDAV MKCOL %s failed: HTTP %d — %s',
+                    $path,
+                    $statusCode,
+                    (string) $response->getBody()
+                ));
+            }
         } catch (ClientExceptionInterface $e) {
-            return new WebDavResponse(
-                success: false,
-                message: 'Failed to delete file: ' . $e->getMessage()
+            // Some PSR-18 clients throw on 4xx/5xx — check if it's a 405
+            $message = $e->getMessage();
+            if (str_contains($message, '405')) {
+                return;
+            }
+            throw new \RuntimeException(
+                sprintf('WebDAV MKCOL %s failed: %s', $path, $message),
+                $e->getCode(),
+                $e
             );
         }
     }
 
-    /**
-     * Create directory.
-     */
-    public function createDirectory(string $path): WebDavResponse
+    public function createDirectoryRecursive(string $path): void
     {
-        try {
-            $response = $this->request('MKCOL', $path);
+        $parts = explode('/', trim($path, '/'));
+        $current = '';
 
-            $success = intval($response->getStatusCode() / 100) === 2;
-
-            return new WebDavResponse(
-                success: $success,
-                message: $success ? 'Directory created successfully' : $response->getReasonPhrase()
-            );
-
-        } catch (ClientExceptionInterface $e) {
-            return new WebDavResponse(
-                success: false,
-                message: 'Failed to create directory: ' . $e->getMessage()
-            );
+        foreach ($parts as $part) {
+            if ($part === '') {
+                continue;
+            }
+            $current .= '/' . $part;
+            $this->createDirectory($current);
         }
     }
 
-    /**
-     * Check if path exists.
-     */
     public function exists(string $path): bool
     {
+        $encodedPath = $this->encodePath($path);
+        $request = $this->createRequest('PROPFIND', $this->buildFullUrl($encodedPath))
+            ->withHeader('Depth', '0')
+            ->withBody($this->streamFactory->createStream(
+                '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/></d:prop></d:propfind>'
+            ));
+
         try {
-            $response = $this->request('HEAD', $path);
-            return intval($response->getStatusCode() / 100) === 2;
-        } catch (ClientExceptionInterface $e) {
+            $response = $this->httpClient->sendRequest($request);
+            return $response->getStatusCode() >= 200 && $response->getStatusCode() < 300;
+        } catch (ClientExceptionInterface) {
             return false;
         }
     }
 
-    /**
-     * Search for files by name pattern.
-     */
-    public function searchFiles(string $directory, string $pattern): WebDavResponse
+    public function getFileInfo(string $path): ?array
     {
-        $listResponse = $this->list($directory);
+        $encodedPath = $this->encodePath($path);
 
-        if (!$listResponse->success) {
-            return $listResponse;
-        }
+        $propfindBody = '<?xml version="1.0"?>
+<d:propfind xmlns:d="DAV:">
+  <d:prop>
+    <d:getcontentlength/>
+    <d:getetag/>
+  </d:prop>
+</d:propfind>';
 
-        $matchingFiles = array_filter($listResponse->items, function ($item) use ($pattern) {
-            return !$item->isDirectory && fnmatch($pattern, $item->name);
-        });
+        $request = $this->createRequest('PROPFIND', $this->buildFullUrl($encodedPath))
+            ->withHeader('Depth', '0')
+            ->withHeader('Content-Type', 'application/xml')
+            ->withBody($this->streamFactory->createStream($propfindBody));
 
-        return new WebDavResponse(
-            success: true,
-            items: array_values($matchingFiles)
-        );
-    }
-
-    /**
-     * Get file information.
-     */
-    public function getFileInfo(string $path): WebDavResponse
-    {
         try {
-            $response = $this->request('PROPFIND', $path, ['Depth' => '0']);
+            $response = $this->httpClient->sendRequest($request);
+            $statusCode = $response->getStatusCode();
 
-            if (intval($response->getStatusCode() / 100) !== 2) {
-                return new WebDavResponse(
-                    success: false,
-                    message: $response->getReasonPhrase()
-                );
+            if ($statusCode === 404) {
+                return null;
             }
 
-            $xml = simplexml_load_string($response->getBody()->getContents());
-            if ($xml === false) {
-                return new WebDavResponse(
-                    success: false,
-                    message: 'Failed to parse XML response'
-                );
+            if ($statusCode < 200 || $statusCode >= 300) {
+                throw new \RuntimeException(sprintf(
+                    'WebDAV PROPFIND %s failed: HTTP %d',
+                    $path,
+                    $statusCode
+                ));
             }
 
-            $childResponses = $xml->children('DAV:');
+            $xml = $response->getBody()->getContents();
 
-            if (count($childResponses) > 0) {
-                $prop = $childResponses[0]->propstat->prop;
-                $filename = basename($path);
-                $item = $this->propToWebDavItem($prop, $filename);
+            $prevUseErrors = libxml_use_internal_errors(true);
+            $dom = new \DOMDocument();
+            $dom->loadXML($xml);
+            libxml_use_internal_errors($prevUseErrors);
 
-                return new WebDavResponse(
-                    success: true,
-                    items: [$item]
-                );
+            $xpath = new \DOMXPath($dom);
+            $xpath->registerNamespace('d', 'DAV:');
+
+            $size = 0;
+            $sizeNode = $xpath->query('//d:getcontentlength')->item(0);
+            if ($sizeNode) {
+                $size = (int) $sizeNode->textContent;
             }
 
-            return new WebDavResponse(
-                success: false,
-                message: 'File not found'
-            );
+            $etag = '';
+            $etagNode = $xpath->query('//d:getetag')->item(0);
+            if ($etagNode) {
+                $etag = trim($etagNode->textContent, '"');
+            }
 
+            return ['size' => $size, 'etag' => $etag];
         } catch (ClientExceptionInterface $e) {
-            return new WebDavResponse(
-                success: false,
-                message: 'Failed to get file info: ' . $e->getMessage()
+            if ($e->getCode() === 404) {
+                return null;
+            }
+            throw new \RuntimeException(
+                sprintf('WebDAV PROPFIND %s failed: %s', $path, $e->getMessage()),
+                $e->getCode(),
+                $e
             );
         }
     }
 
+    public function setMtime(string $path, int $mtime): void
+    {
+        $encodedPath = $this->encodePath($path);
+
+        $body = '<?xml version="1.0"?>
+<d:propertyupdate xmlns:d="DAV:">
+  <d:set>
+    <d:prop>
+      <d:lastmodified>' . $mtime . '</d:lastmodified>
+    </d:prop>
+  </d:set>
+</d:propertyupdate>';
+
+        $request = $this->createRequest('PROPPATCH', $this->buildFullUrl($encodedPath))
+            ->withHeader('Content-Type', 'application/xml')
+            ->withBody($this->streamFactory->createStream($body));
+
+        try {
+            $response = $this->httpClient->sendRequest($request);
+            $statusCode = $response->getStatusCode();
+
+            if ($statusCode < 200 || $statusCode >= 300) {
+                throw new \RuntimeException(sprintf(
+                    'WebDAV PROPPATCH %s failed: HTTP %d — %s',
+                    $path,
+                    $statusCode,
+                    (string) $response->getBody()
+                ));
+            }
+        } catch (ClientExceptionInterface $e) {
+            throw new \RuntimeException(
+                sprintf('WebDAV PROPPATCH %s failed: %s', $path, $e->getMessage()),
+                $e->getCode(),
+                $e
+            );
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Generic request (for extensions/subclasses)
+    // ─────────────────────────────────────────────────────────────
+
     /**
-     * Make HTTP request to WebDAV server.
+     * Send a raw WebDAV request. For custom methods (MOVE, COPY, LOCK etc.).
      *
      * @param array<string, string> $headers
+     * @return \Psr\Http\Message\ResponseInterface
      */
-    private function request(
-        string $method,
-        string $path,
-        array $headers = [],
-        ?string $body = null,
-    ): ResponseInterface {
-        $url = $this->baseUrl . ltrim($path, '/');
-
-        $request = $this->requestFactory->createRequest($method, $url)
-            ->withHeader('Authorization', 'Basic ' . base64_encode($this->username . ':' . $this->password))
-            ->withHeader('User-Agent', 'Four-WebDAV-Client-PHP/2.0');
+    public function sendRequest(string $method, string $path, array $headers = [], ?string $body = null): \Psr\Http\Message\ResponseInterface
+    {
+        $encodedPath = $this->encodePath($path);
+        $request = $this->createRequest($method, $this->buildFullUrl($encodedPath));
 
         foreach ($headers as $name => $value) {
             $request = $request->withHeader($name, $value);
         }
 
         if ($body !== null) {
-            $stream = $this->streamFactory->createStream($body);
-            $request = $request->withBody($stream);
+            $request = $request->withBody($this->streamFactory->createStream($body));
         }
 
-        return $this->httpClient->sendRequest($request);
+        try {
+            return $this->httpClient->sendRequest($request);
+        } catch (ClientExceptionInterface $e) {
+            throw new \RuntimeException(
+                sprintf('WebDAV %s %s failed: %s', $method, $path, $e->getMessage()),
+                $e->getCode(),
+                $e
+            );
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Protected: URL Building (accessible to subclasses)
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Encode a file path for WebDAV, encoding each segment individually.
+     * Uses SabreDAV-compatible encoding.
+     */
+    protected function encodePath(string $path): string
+    {
+        $path = '/' . ltrim($path, '/');
+        $segments = explode('/', $path);
+        $encoded = array_map(function (string $segment): string {
+            if ($segment === '') {
+                return '';
+            }
+            return strtr(rawurlencode($segment), [
+                '%21' => '!',
+                '%24' => '$',
+                '%26' => '&',
+                '%27' => "'",
+                '%28' => '(',
+                '%29' => ')',
+                '%2A' => '*',
+                '%2B' => '+',
+                '%2C' => ',',
+                '%3B' => ';',
+                '%3D' => '=',
+                '%3A' => ':',
+                '%40' => '@',
+            ]);
+        }, $segments);
+        return implode('/', $encoded);
     }
 
     /**
-     * Convert WebDAV property to WebDavItem.
+     * Build a full absolute URL from an encoded path.
      */
-    private function propToWebDavItem(SimpleXMLElement $element, string $path): WebDavItem
+    protected function buildFullUrl(string $encodedPath): string
     {
-        $dav = $element->children('DAV:');
+        return $this->baseUrl . $encodedPath;
+    }
 
-        $isDirectory = isset($dav->resourcetype->collection);
-        $lastModified = null;
-        $size = 0;
+    // ─────────────────────────────────────────────────────────────
+    // Protected: PROPFIND XML Parsing (accessible to subclasses)
+    // ─────────────────────────────────────────────────────────────
 
-        if (isset($dav->{'last-modified'})) {
-            try {
-                $lastModified = new DateTime((string) $dav->{'last-modified'});
-            } catch (\Exception $e) {
-                // Ignore invalid date formats
+    /**
+     * Parse a PROPFIND multistatus XML response into WebDavItem[].
+     *
+     * @param string $xml          Raw XML response body
+     * @param string $requestPath  Full URL path of the PROPFIND request (for parent-entry filtering)
+     * @return WebDavItem[]
+     */
+    protected function parsePropfindResponse(string $xml, string $requestPath): array
+    {
+        $prevUseErrors = libxml_use_internal_errors(true);
+
+        $dom = new \DOMDocument();
+        $dom->loadXML($xml);
+
+        libxml_use_internal_errors($prevUseErrors);
+
+        $xpath = new \DOMXPath($dom);
+        $xpath->registerNamespace('d', 'DAV:');
+        $xpath->registerNamespace('oc', 'http://owncloud.org/ns');
+        $xpath->registerNamespace('nc', 'http://nextcloud.org/ns');
+
+        $entries = [];
+        $responses = $xpath->query('//d:response');
+
+        foreach ($responses as $response) {
+            $href = $xpath->query('d:href', $response)->item(0)?->textContent ?? '';
+
+            // Skip the parent directory entry
+            $decodedHref = urldecode($href);
+            $decodedRequest = urldecode($requestPath);
+            if (rtrim($decodedHref, '/') === rtrim($decodedRequest, '/')) {
+                continue;
+            }
+
+            $resourceType = $xpath->query('.//d:resourcetype/d:collection', $response);
+            $isDirectory = $resourceType->length > 0;
+
+            $size = 0;
+            $sizeNode = $xpath->query('.//d:getcontentlength', $response)->item(0);
+            if ($sizeNode) {
+                $size = (int) $sizeNode->textContent;
+            }
+
+            $etag = '';
+            $etagNode = $xpath->query('.//d:getetag', $response)->item(0);
+            if ($etagNode) {
+                $etag = trim($etagNode->textContent, '"');
+            }
+
+            $contentType = '';
+            $contentTypeNode = $xpath->query('.//d:getcontenttype', $response)->item(0);
+            if ($contentTypeNode) {
+                $contentType = $contentTypeNode->textContent;
+            }
+
+            $mountType = '';
+            $mountTypeNode = $xpath->query('.//nc:mount-type', $response)->item(0);
+            if ($mountTypeNode) {
+                $mountType = $mountTypeNode->textContent;
+            }
+
+            $mtime = 0;
+            $mtimeNode = $xpath->query('.//d:getlastmodified', $response)->item(0);
+            if ($mtimeNode) {
+                $mtime = strtotime($mtimeNode->textContent) ?: 0;
+            }
+
+            $relativePath = $this->extractRelativePath($href);
+            $name = basename(urldecode($href));
+
+            $entries[] = new WebDavItem(
+                name: $name,
+                path: $relativePath,
+                isDirectory: $isDirectory,
+                size: $size,
+                etag: $etag,
+                mtime: $mtime,
+                contentType: $contentType,
+                mountType: $mountType,
+            );
+        }
+
+        return $entries;
+    }
+
+    /**
+     * Extract a clean relative path from a WebDAV href.
+     * Strips the base URL path prefix.
+     */
+    protected function extractRelativePath(string $href): string
+    {
+        $decoded = urldecode($href);
+
+        $basePath = parse_url($this->baseUrl, PHP_URL_PATH) ?? '';
+        $basePath = rtrim($basePath, '/');
+
+        if ($basePath !== '' && str_starts_with($decoded, $basePath)) {
+            $relative = substr($decoded, strlen($basePath));
+            return $relative === '' ? '/' : rtrim($relative, '/');
+        }
+
+        return $decoded;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Private helpers
+    // ─────────────────────────────────────────────────────────────
+
+    /**
+     * Create a PSR-7 request with Basic Auth header.
+     */
+    private function createRequest(string $method, string $url): \Psr\Http\Message\RequestInterface
+    {
+        return $this->requestFactory->createRequest($method, $url)
+            ->withHeader('Authorization', 'Basic ' . base64_encode($this->username . ':' . $this->password));
+    }
+
+    /**
+     * @return WebDavItem[]
+     */
+    private function doListRecursive(string $path, ?callable $onDirectory, int &$fileCount): array
+    {
+        $entries = $this->listDirectory($path);
+        $files = [];
+
+        foreach ($entries as $entry) {
+            if ($entry->isDirectory) {
+                if ($onDirectory !== null) {
+                    $onDirectory($entry->path, $fileCount);
+                }
+                $subFiles = $this->doListRecursive($entry->path, $onDirectory, $fileCount);
+                $files = array_merge($files, $subFiles);
+            } else {
+                $files[] = $entry;
+                $fileCount++;
             }
         }
 
-        if (isset($dav->{'content-length'})) {
-            $size = intval((string) $dav->{'content-length'});
-        }
-
-        return new WebDavItem(
-            name: basename($path),
-            path: $path,
-            isDirectory: $isDirectory,
-            size: $size,
-            lastModified: $lastModified,
-            contentType: (string) ($dav->{'content-type'} ?? '')
-        );
+        return $files;
     }
 }

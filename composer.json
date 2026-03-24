@@ -1,15 +1,14 @@
 {
     "name": "four-bytes/four-webdav-client-php",
-    "description": "A modern PHP WebDAV client library for Nextcloud, ownCloud, and other WebDAV servers",
+    "description": "A modern PHP WebDAV client library using PSR-18",
     "type": "library",
     "license": "MIT",
     "keywords": [
         "webdav",
-        "nextcloud",
-        "owncloud",
         "http",
         "client",
-        "php"
+        "php",
+        "psr-18"
     ],
     "authors": [
         {
@@ -28,8 +27,10 @@
         "psr/http-client": "^1.0",
         "psr/http-factory": "^1.0",
         "psr/http-message": "^1.0|^2.0",
+        "psr/log": "^2.0|^3.0",
         "ext-simplexml": "*",
-        "ext-libxml": "*"
+        "ext-libxml": "*",
+        "ext-dom": "*"
     },
     "require-dev": {
         "phpunit/phpunit": "^11.0",
@@ -38,8 +39,7 @@
         "nyholm/psr7": "^1.8"
     },
     "suggest": {
-        "symfony/http-client": "PSR-18 HTTP client implementation",
-        "guzzlehttp/guzzle": "Alternative PSR-18 HTTP client implementation"
+        "guzzlehttp/guzzle": "Inject as PSR-18 client for streaming, async, and progress callback support"
     },
     "autoload": {
         "psr-4": {
