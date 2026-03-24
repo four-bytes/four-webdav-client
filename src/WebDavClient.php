@@ -136,7 +136,8 @@ class WebDavClient implements WebDavClientInterface
     public function listRecursive(string $path = '/', ?callable $onDirectory = null): array
     {
         $fileCount = 0;
-        return $this->doListRecursive($path, $onDirectory, $fileCount);
+        $visited = [];
+        return $this->doListRecursive($path, $onDirectory, $fileCount, $visited);
     }
 
     public function listBreadthFirst(
@@ -147,12 +148,17 @@ class WebDavClient implements WebDavClientInterface
         $files = [];
         $fileCount = 0;
         $queue = [];
+        $visited = [];
 
         $entries = $initialEntries ?? $this->listDirectory($path);
 
         foreach ($entries as $entry) {
             if ($entry->isDirectory) {
-                $queue[] = $entry->path;
+                $normalized = rtrim($entry->path, '/');
+                if (!isset($visited[$normalized])) {
+                    $visited[$normalized] = true;
+                    $queue[] = $entry->path;
+                }
             } else {
                 $files[] = $entry;
                 $fileCount++;
@@ -181,8 +187,12 @@ class WebDavClient implements WebDavClientInterface
 
             foreach ($dirEntries as $entry) {
                 if ($entry->isDirectory) {
-                    $queue[] = $entry->path;
-                    $dirsTotal++;
+                    $normalized = rtrim($entry->path, '/');
+                    if (!isset($visited[$normalized])) {
+                        $visited[$normalized] = true;
+                        $queue[] = $entry->path;
+                        $dirsTotal++;
+                    }
                 } else {
                     $files[] = $entry;
                     $fileCount++;
@@ -641,17 +651,23 @@ class WebDavClient implements WebDavClientInterface
     /**
      * @return WebDavItem[]
      */
-    private function doListRecursive(string $path, ?callable $onDirectory, int &$fileCount): array
+    private function doListRecursive(string $path, ?callable $onDirectory, int &$fileCount, array &$visited = []): array
     {
         $entries = $this->listDirectory($path);
         $files = [];
 
         foreach ($entries as $entry) {
             if ($entry->isDirectory) {
+                $normalized = rtrim($entry->path, '/');
+                if (isset($visited[$normalized])) {
+                    continue;
+                }
+                $visited[$normalized] = true;
+
                 if ($onDirectory !== null) {
                     $onDirectory($entry->path, $fileCount);
                 }
-                $subFiles = $this->doListRecursive($entry->path, $onDirectory, $fileCount);
+                $subFiles = $this->doListRecursive($entry->path, $onDirectory, $fileCount, $visited);
                 $files = array_merge($files, $subFiles);
             } else {
                 $files[] = $entry;
