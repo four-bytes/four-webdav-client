@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Four\WebDav\Tests\Unit;
 
 use Four\WebDav\WebDavClient;
-use Four\WebDav\WebDavItem;
 use Http\Mock\Client as MockClient;
 use Nyholm\Psr7\Factory\Psr17Factory;
 use Nyholm\Psr7\Response;
@@ -139,7 +138,7 @@ class WebDavClientTest extends TestCase
         // Must not throw
         $this->client->createDirectory('existing-folder');
 
-        $this->assertTrue(true);
+        $this->assertCount(1, $this->mockHttpClient->getRequests());
     }
 
     public function testCreateDirectoryThrowsOnOtherError(): void
@@ -283,7 +282,6 @@ class WebDavClientTest extends TestCase
         $items = $this->client->listDirectory('/');
 
         $this->assertCount(2, $items);
-        $this->assertContainsOnlyInstancesOf(WebDavItem::class, $items);
 
         $dir = $items[0];
         $this->assertTrue($dir->isDirectory);

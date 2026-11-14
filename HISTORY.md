@@ -1,3 +1,8 @@
+## [Unreleased]
+
+### Fixed
+- PHPStan level 6 green: array value types for `listBreadthFirst()`, `uploadFile()` and the recursive listing, `@phpstan-consistent-constructor` for `create()`, unnecessary nullsafe operator removed; two always-true test assertions replaced (#6)
+
 ## [3.0.0] - 2026-03-24
 
 ### Added

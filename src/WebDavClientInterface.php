@@ -22,11 +22,19 @@ interface WebDavClientInterface
     /** @return WebDavItem[] */
     public function listRecursive(string $path = '/', ?callable $onDirectory = null): array;
 
-    /** @return WebDavItem[] */
+    /**
+     * @param WebDavItem[]|null $initialEntries
+     * @return WebDavItem[]
+     */
     public function listBreadthFirst(string $path = '/', ?array $initialEntries = null, ?callable $onDirectory = null): array;
 
     public function downloadFile(string $path): string;
+
+    /**
+     * @param array<string, string> $extraHeaders
+     */
     public function uploadFile(string $path, string $content, array $extraHeaders = []): void;
+
     public function createDirectory(string $path): void;
     public function createDirectoryRecursive(string $path): void;
     public function exists(string $path): bool;
