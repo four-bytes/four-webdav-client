@@ -1,4 +1,7 @@
-## [Unreleased]
+## [3.0.1] - 2026-11-14
+
+### Changed
+- `four-bytes/four-http-client` `^4.0 || ^5.0` — installable together with packages that need v5; tests pass against v4.2.1 and v5.0.1. Redundant `vcs` repository removed, the package is on Packagist (#5)
 
 ### Fixed
 - PHPStan level 6 green: array value types for `listBreadthFirst()`, `uploadFile()` and the recursive listing, `@phpstan-consistent-constructor` for `create()`, unnecessary nullsafe operator removed; two always-true test assertions replaced (#6)
