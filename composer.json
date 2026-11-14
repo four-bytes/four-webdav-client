@@ -23,7 +23,7 @@
         "source": "https://github.com/four-bytes/four-webdav-client"
     },
     "require": {
-        "php": "^8.1",
+        "php": "^8.4",
         "four-bytes/four-http-client": "^4.0",
         "psr/http-client": "^1.0",
         "psr/http-factory": "^1.0",

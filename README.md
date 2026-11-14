@@ -4,7 +4,7 @@ A modern PHP WebDAV client library for Nextcloud, ownCloud, and other WebDAV ser
 
 ## Features
 
-- **Modern PHP 8.1+** - Built with modern PHP features and type safety
+- **Modern PHP 8.4+** - Built with modern PHP features and type safety
 - **PSR-4 Autoloading** - Standard PHP package structure
 - **Comprehensive WebDAV Support** - All essential WebDAV operations
 - **Server Compatibility** - Works with Nextcloud, ownCloud, Apache WebDAV, and more
@@ -310,7 +310,7 @@ composer cs-fix
 
 ## Requirements
 
-- PHP 8.1 or higher
+- PHP 8.4 or higher
 - `four-bytes/four-http-client ^4.0`
 - PSR-18 HTTP client (symfony/http-client or guzzlehttp/guzzle)
 - SimpleXML extension
