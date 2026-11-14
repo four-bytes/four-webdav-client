@@ -17,6 +17,8 @@ use Psr\Log\NullLogger;
  * All paths are relative to the base URL. The injected HTTP client
  * can be retrieved via getHttpClient() for advanced usage (e.g. casting
  * to Guzzle for async operations in a wrapper/subclass).
+ *
+ * @phpstan-consistent-constructor
  */
 class WebDavClient implements WebDavClientInterface
 {
@@ -141,6 +143,9 @@ class WebDavClient implements WebDavClientInterface
         return $this->doListRecursive($path, $onDirectory, $fileCount, $visited);
     }
 
+    /**
+     * @param WebDavItem[]|null $initialEntries
+     */
     public function listBreadthFirst(
         string $path = '/',
         ?array $initialEntries = null,
@@ -243,6 +248,9 @@ class WebDavClient implements WebDavClientInterface
     // Upload
     // ─────────────────────────────────────────────────────────────
 
+    /**
+     * @param array<string, string> $extraHeaders
+     */
     public function uploadFile(string $path, string $content, array $extraHeaders = []): void
     {
         $encodedPath = $this->encodePath($path);
@@ -557,7 +565,7 @@ class WebDavClient implements WebDavClientInterface
         $responses = $xpath->query('//d:response');
 
         foreach ($responses as $response) {
-            $href = $xpath->query('d:href', $response)->item(0)?->textContent ?? '';
+            $href = $xpath->query('d:href', $response)->item(0)->textContent ?? '';
 
             // Skip the parent directory entry
             $decodedHref = urldecode($href);
@@ -664,6 +672,7 @@ class WebDavClient implements WebDavClientInterface
     }
 
     /**
+     * @param array<string, bool> $visited
      * @return WebDavItem[]
      */
     private function doListRecursive(string $path, ?callable $onDirectory, int &$fileCount, array &$visited = []): array
