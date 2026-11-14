@@ -24,7 +24,7 @@
     },
     "require": {
         "php": "^8.4",
-        "four-bytes/four-http-client": "^4.0",
+        "four-bytes/four-http-client": "^4.0 || ^5.0",
         "psr/http-client": "^1.0",
         "psr/http-factory": "^1.0",
         "psr/http-message": "^1.0|^2.0",
@@ -52,12 +52,6 @@
             "Four\\WebDav\\Tests\\": "tests/"
         }
     },
-    "repositories": [
-        {
-            "type": "vcs",
-            "url": "https://github.com/four-bytes/four-http-client.git"
-        }
-    ],
     "scripts": {
         "test": "phpunit",
         "phpstan": "phpstan analyse src tests --level=6"
